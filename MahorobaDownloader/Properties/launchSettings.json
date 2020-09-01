@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "MahorobaDownloader": {
+      "commandName": "Project",
+      "nativeDebugging": false
+    }
+  }
+}

@@ -1,5 +1,7 @@
-﻿using MahorobaDownloader.Constants;
+﻿using log4net;
+using MahorobaDownloader.Constants;
 using MahorobaDownloader.Entities;
+using MahorobaDownloader.Utils;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -16,46 +18,96 @@ namespace MahorobaDownloader
 	{
 
 		public static readonly string BASE_URL = @"https://cdn-static.prd.sakura.fusion-studio.co.jp/1.2.0/resources/";
-
 		public static readonly string BASE_DIRECTORY = Path.Combine(Directory.GetParent(Assembly.GetExecutingAssembly().Location).FullName);
-
-		public static readonly string JSON_STAMP_PATH = Path.Combine(BASE_DIRECTORY, "StampList.json");
+		public static readonly string BASE_JSON_DIRECTORY = Path.Combine(Directory.GetParent(Assembly.GetExecutingAssembly().Location).FullName, "Json");
+		public static readonly string JSON_STAMP_PATH = Path.Combine(BASE_JSON_DIRECTORY, "StampList.json");
+		public static readonly string LOG_CONFIG_FILE = Path.Combine(BASE_DIRECTORY, "log4net.config");
+		private static ILog logger;
 
 		static void Main(string[] args)
 		{
-			init();
-			var stamps = GetStamps(JSON_STAMP_PATH);
-			//var directory = Path.Combine(Directory.GetParent(Assembly.GetExecutingAssembly().Location).FullName, "OUTPUT");
-			//if (!Directory.Exists(directory))
-			//{
-			//	Directory.CreateDirectory(directory);
-			//}
-			var stampBinaries = GetStampBinaries(stamps);
-			foreach (var item in stampBinaries)
+			SetupLog4net();
+			try
 			{
-				WriteBinaryToFile(Path.Combine(BASE_DIRECTORY, "test" , item.Key + ".png"), item.Value);
+				Init();
+
+				var stamps = GetStamps(JSON_STAMP_PATH);
+
+				logger.Info("スタンプ取得開始");
+				foreach (var item in GetStampBinaries(stamps))
+				{
+					logger.Info("スタンプ取得中 ID: " + item.Key);
+					FileUtils.WriteBinaryToFile(Path.Combine(BASE_DIRECTORY, "test", item.Key + ".png"), item.Value);
+				}
+				logger.Info("スタンプ取得終了");
+			}catch(Exception ex)
+			{
+				logger.Fatal("致命的なエラーが発生");
+				logger.Fatal(ex.Message);
+				logger.Fatal(ex.StackTrace);
 			}
+			Console.ReadKey();
 		}
 
-		public static void init()
+		public static void SetupLog4net()
 		{
+			System.Xml.XmlDocument log4netConfig = new System.Xml.XmlDocument();
+			log4netConfig.Load(File.OpenRead(LOG_CONFIG_FILE));
+			var repo = LogManager.CreateRepository(
+			 Assembly.GetEntryAssembly(),
+			 typeof(log4net.Repository.Hierarchy.Hierarchy));
+			log4net.Config.XmlConfigurator.Configure(repo, log4netConfig["log4net"]);
+			logger = LogManager.GetLogger(typeof(Program));
+			logger.Debug("Log4net利用可能");
+		}
+		public static void Init()
+		{
+			logger.Debug("初期化処理開始");
 			Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 			if (!File.Exists(JSON_STAMP_PATH))
 			{
+				logger.Debug("Json作成 Path:" + JSON_STAMP_PATH);
 				string json = JsonConvert.SerializeObject(UseInitContent.SMTAMP_LIST, Formatting.Indented);
-				WriteStringToFile(JSON_STAMP_PATH, json);
+				FileUtils.WriteStringToFile(JSON_STAMP_PATH, json);
 			}
+			logger.Debug("初期化処理終了");
 		}
 
 		private static string[] GetStamps(string path)
 		{
-			var jsonstring = ReadStringFromFile(path);
+			logger.Debug("Json読込 Path:" + JSON_STAMP_PATH);
+			var jsonstring = FileUtils.ReadStringFromFile(path);
 			var stampList = JsonConvert.DeserializeObject<List<Stamp>>(jsonstring);
 			return stampList.Select(x => x.Id).ToArray();
 		}
 
+
+		public static byte[] GetStampBinary(string stampId)
+		{
+			return GetStampBinaries(stampId).First().Value;
+		}
+		public static Dictionary<string, byte[]> GetStampBinaries(params string[] stampIds)
+		{
+			logger.Debug("スタンプバイナリ取得開始");
+			var binaries = new Dictionary<string, byte[]>();
+			using (var client = new WebClient())
+			{
+				foreach (var item in stampIds)
+				{
+
+					logger.Debug("スタンプバイナリ取得 Resources: " + "chat/" + item + ".png");
+					if (binaries.ContainsKey(item)) continue;
+					var hash = MD5ConvertTo("chat/" + item + ".png");
+					binaries.Add(item, client.DownloadData(BASE_URL + hash + ".png"));
+				}
+			}
+
+			logger.Debug("スタンプバイナリ取得終了");
+			return binaries;
+		}
 		private static string MD5ConvertTo(string text)
 		{
+			logger.Debug("MD5化 text:" + text);
 			//文字列をbyte型配列に変換する
 			byte[] data = Encoding.UTF8.GetBytes(text);
 
@@ -68,76 +120,7 @@ namespace MahorobaDownloader
 			md5.Clear();
 
 			//byte型配列を16進数の文字列に変換
-			return BitConverter.ToString(bs).ToLower().Replace("-","");
-		}
-
-		public static void WriteStringToFile(string path, string data)
-		{
-
-			WriteBinaryToFile(path, Encoding.UTF8.GetBytes(data));
-		}
-
-		public static string ReadStringFromFile(string path)
-		{
-			var data = ReadBinaryFromFile(path);
-			if(data == null)
-			{
-				return null;
-			}
-			return Encoding.UTF8.GetString(data);
-		}
-
-		public static void WriteBinaryToFile(string path, byte[] data)
-		{
-			var dir = Path.GetDirectoryName(path);
-			if (!Directory.Exists(dir))
-			{
-				Directory.CreateDirectory(dir);
-			}
-
-			using (var fs = new FileStream(path, FileMode.Create))
-			using (var sw = new BinaryWriter(fs))
-			{
-				sw.Write(data);
-			}
-		}
-
-		public static byte[] ReadBinaryFromFile(string path)
-		{
-			if (File.Exists(path))
-			{
-				using (var fs = new FileStream(path, FileMode.Open))
-				using (var sr = new BinaryReader(fs))
-				{
-					var len = (int)fs.Length;
-					var data = new byte[len];
-					sr.Read(data, 0, len);
-
-					return data;
-				}
-			}
-
-			return null;
-		}
-
-		public static byte[] GetStampBinary(string stampId)
-		{
-			return GetStampBinaries(stampId).First().Value;
-		}
-		public static Dictionary<string, byte[]> GetStampBinaries(params string[] stampIds)
-		{
-			var binaries = new Dictionary<string, byte[]>();
-			using (var client = new WebClient())
-			{
-				foreach (var item in stampIds)
-				{
-					if (binaries.ContainsKey(item)) continue;
-					var hash = MD5ConvertTo("chat/" + item + ".png");
-					binaries.Add(item, client.DownloadData(BASE_URL + hash + ".png"));
-				}
-			}
-
-			return binaries;
+			return BitConverter.ToString(bs).ToLower().Replace("-", "");
 		}
 	}
 }
