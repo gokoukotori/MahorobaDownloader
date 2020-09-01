@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace MahorobaDownloader.Entities
 {
-	[JsonObject("StampList")]
+	[JsonObject("Stamp")]
 	public class Stamp
 	{
 		public Stamp()
